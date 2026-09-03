@@ -66,7 +66,11 @@ function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 
 function onSample(m) {
   st.lastSample = m;
-  st.age = nowMs() - m.arrivalWallMs;
+  // Date.now(), NOT performance.timeOrigin+now(): the latter is monotonic
+  // from page load and drifts from wall clock across sleep and NTP steps,
+  // which made this read as tens of seconds NEGATIVE. The server stamps
+  // arrival with time.time(), so this must be the same clock family.
+  st.age = Date.now() - m.arrivalWallMs;
   st.rateHz = m.rateHz;
   st.source = m.source || "—";
   if (st.input === "imu") { st.roll = m.roll; st.pitch = m.pitch; st.yaw = m.yaw; }
@@ -164,7 +168,7 @@ function frame() {
       if (on) a.on++;
     }
 
-    send({ type: "frame", wallMs: wall, t: +t.toFixed(4), input: st.input,
+    send({ type: "frame", wallMs: Date.now(), t: +t.toFixed(4), input: st.input,
            tr: r3(tr), tp: r3(tp), ty: r3(ty),
            ar: r3(st.roll), ap: r3(st.pitch), ay: r3(st.yaw),
            er: r3(er), ep: r3(ep), ey: r3(ey),

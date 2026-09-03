@@ -131,8 +131,13 @@ def analyze_drift(raw):
 def analyze_latency(raw, run):
     out = {}
     hd = finite(raw.get("handler_delay_ms", np.array([])))
-    if hd.size:
+    # iOS Safari stamps DeviceOrientationEvent.timeStamp at dispatch, not at
+    # sensor acquisition, so this reads a hard zero. That is a missing
+    # measurement, not a 0 ms measurement -- do not report it as one.
+    if hd.size and float(np.mean(hd == 0)) < 0.95:
         out["sensor -> handler"] = hd
+    elif hd.size:
+        out["!unmeasurable sensor -> handler"] = hd
 
     sent = raw.get("sent_at_ms")
     arr = raw.get("arrival_wall_ms")
@@ -144,12 +149,19 @@ def analyze_latency(raw, run):
         out["handler -> Mac (transport)"] = finite(transport)
 
     if run and "sample_age_ms" in run:
-        out["Mac arrival -> render"] = finite(run["sample_age_ms"])
+        age = finite(run["sample_age_ms"])
+        # A negative render latency is physically impossible: it means the
+        # harness clock and the server clock disagree. Flag it rather than
+        # reporting a nonsense number.
+        if age.size and np.median(age) < -1.0:
+            out["!Mac arrival -> render"] = age
+        elif age.size:
+            out["Mac arrival -> render"] = age
 
     if ("sensor -> handler" in out and "handler -> Mac (transport)" in out):
         n = min(out["sensor -> handler"].size, out["handler -> Mac (transport)"].size)
         tot = out["sensor -> handler"][:n] + out["handler -> Mac (transport)"][:n]
-        if "Mac arrival -> render" in out and out["Mac arrival -> render"].size:
+        if out.get("Mac arrival -> render") is not None and out["Mac arrival -> render"].size:
             tot = tot + float(np.median(out["Mac arrival -> render"]))
         out["END-TO-END (sensor -> pixels)"] = tot
     return out
@@ -334,11 +346,28 @@ def render(results):
                                     fmt(r["sync"]["rtt_min"], 2)))
         w("| stage | median (ms) | p95 (ms) | n |")
         w("|---|---|---|---|")
+        notes = []
         for stage, arr in r["latency"].items():
             if not arr.size:
                 continue
+            if stage.startswith("!"):
+                notes.append(stage)
+                continue
             w("| %s | **%s** | %s | %d |" % (stage, fmt(pct(arr, 50)),
                                              fmt(pct(arr, 95)), arr.size))
+        for nstage in notes:
+            if "unmeasurable" in nstage:
+                w("\n> `sensor -> handler` is **not measurable on iOS**: Safari "
+                  "stamps `DeviceOrientationEvent.timeStamp` at dispatch rather "
+                  "than at sensor acquisition, so it reads a hard zero. The "
+                  "true sensor-to-handler time is unknown and is *not* included "
+                  "in the totals below.\n")
+            else:
+                med = float(np.median(r["latency"][nstage]))
+                w("\n> `Mac arrival -> render` came out **%s ms** -- negative, so "
+                  "physically impossible. The harness and server clocks "
+                  "disagreed on this run. Fixed; re-run to get this stage.\n"
+                  % fmt(med, 0))
         if r["rate"]:
             w("\nSample rate: %s Hz median (%s Hz mean), worst gap %s ms.\n" % (
                 fmt(r["rate"]["median_hz"], 1), fmt(r["rate"]["mean_hz"], 1),
