@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IMU Flight Rig — Harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0b0d10; color:#e8ecf1;
+         font:13px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 18px;
+           border-bottom:1px solid #1d2431; background:#0e1219; flex-wrap:wrap; }
+  header h1 { font-size:14px; margin:0; letter-spacing:-.01em; font-weight:650; }
+  .pill { font:11px ui-monospace,Menlo,monospace; padding:3px 9px; border-radius:20px;
+          background:#161b25; border:1px solid #232b3a; color:#9aa5b5; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; }
+  .g{background:#3ecf72}.r{background:#e35d55}.y{background:#e0b341}
+  main { display:grid; grid-template-columns: 1fr 380px; gap:14px; padding:14px 18px; align-items:start; }
+  @media (max-width:1100px){ main{grid-template-columns:1fr} }
+  .panel { background:#0e1219; border:1px solid #1d2431; border-radius:12px; padding:14px; }
+  .panel h2 { font-size:11px; text-transform:uppercase; letter-spacing:.1em;
+              color:#7d8798; margin:0 0 11px; font-weight:600; }
+  .insts { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .insts canvas { width:100%; aspect-ratio:1/1; display:block; }
+  #plot { width:100%; height:210px; display:block; }
+  .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:12px; }
+  .m { background:#141821; border:1px solid #212836; border-radius:9px; padding:8px 10px; }
+  .m .k { font-size:9.5px; text-transform:uppercase; letter-spacing:.08em; color:#7d8798; }
+  .m .v { font:17px ui-monospace,Menlo,monospace; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .m .v small { font-size:10px; color:#7d8798; }
+  .row { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:10px; }
+  button { font:12px inherit; font-weight:600; padding:8px 13px; border:1px solid #2a3242;
+           border-radius:8px; background:#171d28; color:#dbe2ec; cursor:pointer; }
+  button:hover { background:#1e2532; }
+  button.on { background:#2f6df6; border-color:#2f6df6; color:#fff; }
+  button.go { background:#2c8a4b; border-color:#2c8a4b; color:#fff; }
+  button.stop { background:#c2413a; border-color:#c2413a; color:#fff; }
+  button:disabled { opacity:.4; cursor:default; }
+  .sl { display:grid; grid-template-columns:58px 1fr 52px; gap:8px; align-items:center;
+        margin-bottom:5px; font:11px ui-monospace,Menlo,monospace; color:#9aa5b5; }
+  .sl input { width:100%; accent-color:#2f6df6; }
+  .sl .n { text-align:right; color:#dbe2ec; font-variant-numeric:tabular-nums; }
+  .axhead { font:11px ui-monospace,Menlo,monospace; color:#ffd24a; margin:10px 0 5px;
+            text-transform:uppercase; letter-spacing:.08em; }
+  .note { color:#7d8798; font-size:11.5px; margin-top:10px; }
+  #mousepad { position:absolute; inset:0; cursor:crosshair; }
+  .wrap { position:relative; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IMU Flight Rig</h1>
+  <span class="pill"><span class="dot r" id="dot"></span><span id="conn">connecting</span></span>
+  <span class="pill" id="rate">— Hz</span>
+  <span class="pill" id="srcpill">source —</span>
+  <span class="pill" id="runpill">idle</span>
+  <span class="pill" id="agepill">age — ms</span>
+</header>
+
+<div id="warn" style="display:none;margin:10px 18px 0;padding:10px 13px;border-radius:9px;
+     background:#3a1a19;border:1px solid #6d2b27;color:#ffb9b4;font-size:12.5px"></div>
+<main>
+  <div>
+    <div class="panel">
+      <h2>Instruments</h2>
+      <div class="insts">
+        <div class="wrap"><canvas id="ah"></canvas><div id="mousepad" style="display:none"></div></div>
+        <canvas id="hi"></canvas>
+      </div>
+      <div class="metrics">
+        <div class="m"><div class="k">Elapsed</div><div class="v" id="mEl">—<small> s</small></div></div>
+        <div class="m"><div class="k">RMS error</div><div class="v" id="mRms">—<small>°</small></div></div>
+        <div class="m"><div class="k">On target</div><div class="v" id="mOt">—<small> %</small></div></div>
+        <div class="m"><div class="k">Neutral bias</div><div class="v" id="mNb">—<small>°</small></div></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>Drift / deviation</h2>
+      <canvas id="plot"></canvas>
+      <div class="note" id="driftnote">
+        Drift mode: put the phone flat on a table and do not touch it for 5 minutes.
+        Both yaw sources are plotted — relative <code>alpha</code> drifts, fused
+        <code>webkitCompassHeading</code> should not.
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Run</h2>
+      <div class="row">
+        <button id="mTrack" class="on">Tracking</button>
+        <button id="mDrift">Drift</button>
+      </div>
+      <div class="row">
+        <button id="iImu" class="on">IMU</button>
+        <button id="iMouse">Mouse baseline</button>
+      </div>
+      <div class="row">
+        <button id="dQuick" class="on">quick 90s</button>
+        <button id="dEnd">endurance 300s</button>
+      </div>
+      <div class="row">
+        <button id="go" class="go">Start run</button>
+        <button id="zero">Zero attitude</button>
+      </div>
+      <div class="note" id="hint"></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>Mapping (live)</h2>
+      <div id="sliders"></div>
+      <div class="note">Edits apply immediately and are snapshotted into the run's
+        metadata, so every result stays traceable to the mapping that produced it.</div>
+    </div>
+  </div>
+</main>
+
+<script src="/instruments.js"></script>
+<script src="/harness.js"></script>
+</body>
+</html>

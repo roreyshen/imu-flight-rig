@@ -1,0 +1,8 @@
+logs/
+certs/*.pem
+certs/*.srl
+__pycache__/
+*.pyc
+.DS_Store
+certs/.cert_ip
+REPORT.md

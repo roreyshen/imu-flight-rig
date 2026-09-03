@@ -1,0 +1,28 @@
+{
+  "roll": {
+    "source": "gamma",
+    "range": 60.0,
+    "deadzone": 0.05,
+    "expo": 0.3,
+    "sensitivity": 1.0,
+    "invert": false
+  },
+  "pitch": {
+    "source": "beta",
+    "range": 45.0,
+    "deadzone": 0.05,
+    "expo": 0.3,
+    "sensitivity": 1.0,
+    "invert": false
+  },
+  "yaw": {
+    "source": "alpha",
+    "range": 60.0,
+    "deadzone": 0.08,
+    "expo": 0.3,
+    "sensitivity": 1.0,
+    "invert": false
+  },
+  "tolerance_deg": 5.0,
+  "difficulty": 1.0
+}

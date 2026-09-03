@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>IMU Sender</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-user-select: none; user-select: none; }
+  body { margin:0; padding:20px; font:16px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;
+         background:#0b0d10; color:#e8ecf1; min-height:100vh; }
+  h1 { font-size:19px; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub { color:#8b94a3; font-size:13px; margin-bottom:18px; }
+  button { width:100%; padding:20px; font-size:19px; font-weight:600; border:0; border-radius:14px;
+           background:#2f6df6; color:#fff; margin-bottom:14px; -webkit-appearance:none; }
+  button:disabled { background:#252a33; color:#5b6474; }
+  button.stop { background:#c2413a; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+  .cell { background:#141821; border:1px solid #212836; border-radius:11px; padding:10px 12px; }
+  .k { font-size:10.5px; text-transform:uppercase; letter-spacing:.09em; color:#7d8798; }
+  .v { font-size:20px; font-variant-numeric:tabular-nums; margin-top:3px; }
+  .v small { font-size:12px; color:#7d8798; }
+  #msg { padding:13px 14px; border-radius:11px; font-size:14px; margin-bottom:14px; display:none; }
+  .err { background:#3a1a19; border:1px solid #6d2b27; color:#ffb9b4; }
+  .ok  { background:#14291c; border:1px solid #245c37; color:#9ae6b4; }
+  .warn{ background:#33280f; border:1px solid #6b551c; color:#f5d78e; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:1px; }
+  .g{background:#3ecf72} .r{background:#e35d55} .y{background:#e0b341}
+  ul { margin:0; padding-left:19px; color:#8b94a3; font-size:13px; }
+  li { margin-bottom:5px; }
+</style>
+</head>
+<body>
+<h1>IMU Sender</h1>
+<div class="sub">Phase 0 — phone as stand-in controller</div>
+
+<div id="msg"></div>
+<button id="start">Start streaming</button>
+
+<div class="grid">
+  <div class="cell"><div class="k">Rate</div><div class="v" id="hz">—<small> Hz</small></div></div>
+  <div class="cell"><div class="k">Samples</div><div class="v" id="n">0</div></div>
+  <div class="cell"><div class="k">RTT</div><div class="v" id="rtt">—<small> ms</small></div></div>
+  <div class="cell"><div class="k">Clock offset</div><div class="v" id="off">—<small> ms</small></div></div>
+  <div class="cell"><div class="k">Alpha (rel)</div><div class="v" id="a">—</div></div>
+  <div class="cell"><div class="k">Compass (abs)</div><div class="v" id="c">—</div></div>
+  <div class="cell"><div class="k">Beta</div><div class="v" id="b">—</div></div>
+  <div class="cell"><div class="k">Gamma</div><div class="v" id="g">—</div></div>
+</div>
+
+<div class="cell" style="margin-bottom:14px">
+  <div class="k">Status</div>
+  <div style="margin-top:6px;font-size:14px"><span class="dot r" id="dot"></span><span id="state">connecting…</span></div>
+  <div style="margin-top:4px;font-size:12px;color:#7d8798" id="src">—</div>
+</div>
+
+<ul>
+  <li>Keep this tab in the foreground — backgrounded tabs get throttled.</li>
+  <li>Turn off Low Power Mode; it reduces the sensor rate.</li>
+  <li>Before a yaw run, wave the phone in a figure-8 to calibrate the compass.</li>
+</ul>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var msg = $("msg"), btn = $("start");
+
+  function say(text, cls) { msg.textContent = text; msg.className = cls; msg.style.display = "block"; }
+
+  // ---- clock: epoch ms, high-resolution, immune to wall-clock jumps mid-run
+  function nowMs() { return performance.timeOrigin + performance.now(); }
+
+  var ws = null, running = false, seq = 0, count = 0;
+  var samples = [];                 // timestamps for the Hz readout
+  var syncs = [];                   // rolling {rtt, offset} window
+  var bestOffset = null, minRtt = null;
+  var last = null, source = "—", dropped = 0;
+
+  // ---- WebSocket (same origin, so one cert exception covers page + socket)
+  function connect() {
+    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+    ws.onopen = function () {
+      setState("connected", "g");
+      ws.send(JSON.stringify({ type: "hello", ua: navigator.userAgent }));
+      pingLoop();
+    };
+    ws.onclose = function () {
+      setState("disconnected — retrying", "r");
+      setTimeout(connect, 1200);
+    };
+    ws.onerror = function () { setState("socket error", "r"); };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === "pong") onPong(m);
+    };
+  }
+
+  function setState(t, c) { $("state").textContent = t; $("dot").className = "dot " + c; }
+
+  // ---- NTP-style clock sync.
+  // The phone clock and the Mac clock are unrelated, so latency cannot be
+  // measured by subtracting them. offset = (Mac clock) - (phone clock).
+  function pingLoop() {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: "ping", t0: nowMs() }));
+    setTimeout(pingLoop, 2000);
+  }
+
+  function onPong(m) {
+    var t2 = nowMs(), t0 = m.t0, t1 = m.t1;
+    var rtt = t2 - t0;
+    var offset = ((t1 - t0) + (t1 - t2)) / 2;
+    syncs.push({ rtt: rtt, offset: offset });
+    if (syncs.length > 16) syncs.shift();
+    // Use the offset from the minimum-RTT sample: least queueing noise.
+    var best = syncs[0];
+    for (var i = 1; i < syncs.length; i++) if (syncs[i].rtt < best.rtt) best = syncs[i];
+    bestOffset = best.offset; minRtt = best.rtt;
+    $("rtt").innerHTML = rtt.toFixed(1) + "<small> ms</small>";
+    $("off").innerHTML = (bestOffset / 1000).toFixed(2) + "<small> s</small>";
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: "sync", t0: t0, t1: t1, t2: t2, rtt: rtt,
+                               offset: offset, bestOffset: bestOffset, minRtt: minRtt }));
+    }
+  }
+
+  // ---- orientation
+  // iOS never fires deviceorientationabsolute. It gives relative `alpha`
+  // (gyro-integrated, drifts) plus webkitCompassHeading (magnetometer-fused,
+  // no long-term drift but jittery). We log BOTH and let the analysis compare.
+  function onOrient(e) {
+    if (!running) return;
+    var t = performance.now();
+    var handlerDelay = null;
+    if (typeof e.timeStamp === "number") {
+      var d = t - e.timeStamp;
+      if (d > -1000 && d < 10000) handlerDelay = d;   // sanity-check the basis
+    }
+    var compass = (typeof e.webkitCompassHeading === "number") ? e.webkitCompassHeading : null;
+    var frame = {
+      type: "s", seq: seq++,
+      sentAt: performance.timeOrigin + t,
+      eventTs: (typeof e.timeStamp === "number") ? performance.timeOrigin + e.timeStamp : null,
+      handlerDelay: handlerDelay,
+      alpha: e.alpha, beta: e.beta, gamma: e.gamma,
+      compass: compass,
+      compassAcc: (typeof e.webkitCompassAccuracy === "number") ? e.webkitCompassAccuracy : null,
+      absolute: !!e.absolute, source: source,
+      offset: bestOffset, minRtt: minRtt
+    };
+    // NO smoothing, NO filtering, NO rAF batching — one frame per event.
+    if (ws && ws.readyState === 1) {
+      if (ws.bufferedAmount > 65536) { dropped++; }
+      else { ws.send(JSON.stringify(frame)); }
+    }
+    last = frame; count++;
+    samples.push(t);
+  }
+
+  function paint() {
+    var t = performance.now();
+    while (samples.length && t - samples[0] > 1000) samples.shift();
+    $("hz").innerHTML = samples.length + "<small> Hz</small>";
+    $("n").textContent = count + (dropped ? " (" + dropped + " dropped)" : "");
+    if (last) {
+      $("a").textContent = last.alpha == null ? "—" : last.alpha.toFixed(1) + "°";
+      $("b").textContent = last.beta == null ? "—" : last.beta.toFixed(1) + "°";
+      $("g").textContent = last.gamma == null ? "—" : last.gamma.toFixed(1) + "°";
+      $("c").textContent = last.compass == null ? "n/a" : last.compass.toFixed(1) + "°";
+    }
+    requestAnimationFrame(paint);
+  }
+
+  // ---- screen wake lock, so a 5-minute drift run is not killed by auto-lock
+  var wakeLock = null;
+  function keepAwake() {
+    if (!navigator.wakeLock) return;
+    navigator.wakeLock.request("screen").then(function (w) { wakeLock = w; }, function () {});
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && running) keepAwake();
+  });
+
+  function begin() {
+    var absSupported = ("ondeviceorientationabsolute" in window);
+    source = absSupported ? "deviceorientationabsolute" : "deviceorientation";
+    window.addEventListener(absSupported ? "deviceorientationabsolute" : "deviceorientation",
+                            onOrient, true);
+    running = true;
+    keepAwake();
+    btn.textContent = "Streaming — tap to stop";
+    btn.className = "stop";
+    $("src").textContent = "event: " + source +
+      (absSupported ? "" : "  ·  absolute yaw via webkitCompassHeading");
+    say("Streaming. Keep this tab in the foreground.", "ok");
+    // A stubborn iOS case: permission granted but no events ever arrive.
+    setTimeout(function () {
+      if (count === 0) {
+        say("Permission granted but no motion events are arriving. Check " +
+            "Settings > Safari > Motion & Orientation Access, then reload.", "warn");
+      }
+    }, 2500);
+  }
+
+  function stop() {
+    running = false;
+    btn.textContent = "Start streaming";
+    btn.className = "";
+    if (wakeLock) { try { wakeLock.release(); } catch (e) {} wakeLock = null; }
+  }
+
+  btn.addEventListener("click", function () {
+    if (running) { stop(); return; }
+    // iOS 13+: requestPermission() must be called SYNCHRONOUSLY inside the
+    // gesture handler. Any await before this point discards the user-gesture
+    // token and the call is rejected with no useful error.
+    var DOE = window.DeviceOrientationEvent;
+    if (DOE && typeof DOE.requestPermission === "function") {
+      DOE.requestPermission().then(function (state) {
+        if (state === "granted") begin();
+        else say("Motion access denied. Enable Settings > Safari > Motion & " +
+                 "Orientation Access, then reload this page and tap Start again.", "err");
+      }).catch(function (err) {
+        say("requestPermission failed: " + err + "  — this page must be served " +
+            "over HTTPS and the button tapped directly.", "err");
+      });
+    } else if (DOE) {
+      begin();
+    } else {
+      say("This browser exposes no DeviceOrientationEvent.", "err");
+    }
+  });
+
+  if (location.protocol !== "https:") {
+    say("Not a secure context. iOS will not grant motion access over http.", "err");
+  }
+  connect();
+  requestAnimationFrame(paint);
+})();
+</script>
+</body>
+</html>
