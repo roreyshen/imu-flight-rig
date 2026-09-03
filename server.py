@@ -43,6 +43,10 @@ RAW_HEADER = [
 ]
 SYNC_HEADER = ["wall_ms", "t0", "t1", "t2", "rtt_ms", "offset_ms",
                "best_offset_ms", "min_rtt_ms"]
+FLIGHT_HEADER = ["wall_ms", "t", "input", "x", "y", "z", "v", "hdg", "pitch",
+                 "roll", "cmd_roll", "cmd_pitch", "cmd_yaw",
+                 "wind_x", "wind_y", "wind_z", "gates", "missed", "effort",
+                 "stall", "engine", "sample_age_ms"]
 RUN_HEADER = ["wall_ms", "elapsed_s", "input",
               "tgt_roll", "tgt_pitch", "tgt_yaw",
               "act_roll", "act_pitch", "act_yaw",
@@ -93,6 +97,8 @@ class Run:
         self.raw = CsvLog(os.path.join(LOGS, "raw_%s.csv" % runid), RAW_HEADER)
         self.sync = CsvLog(os.path.join(LOGS, "sync_%s.csv" % runid), SYNC_HEADER)
         self.frames = CsvLog(os.path.join(LOGS, "run_%s.csv" % runid), RUN_HEADER)
+        self.flight = (CsvLog(os.path.join(LOGS, "flight_%s.csv" % runid), FLIGHT_HEADER)
+                       if mode == "flight" else None)
         self.meta_path = os.path.join(LOGS, "meta_%s.json" % runid)
         self.meta = {
             "runid": runid, "mode": mode, "input": inp,
@@ -108,14 +114,19 @@ class Run:
 
     def flush(self):
         self.raw.flush(); self.sync.flush(); self.frames.flush()
+        if self.flight:
+            self.flight.flush()
 
     def close(self):
         self.meta["ended_utc"] = datetime.now(timezone.utc).isoformat()
         self.meta["elapsed_s"] = round(time.time() - self.started_wall, 3)
         self.meta["counts"] = {"raw": self.raw.n, "sync": self.sync.n,
-                               "frames": self.frames.n}
+                               "frames": self.frames.n,
+                               "flight": self.flight.n if self.flight else 0}
         self.write_meta()
         self.raw.close(); self.sync.close(); self.frames.close()
+        if self.flight:
+            self.flight.close()
 
 
 # ----------------------------------------------------------------------- state
@@ -131,7 +142,7 @@ class Rig:
         self.last_sample = None
 
     # -- run control -------------------------------------------------------
-    def start_run(self, mode, inp, duration, label, ua=None):
+    def start_run(self, mode, inp, duration, label, ua=None, seed=None):
         if self.run:
             self.stop_run()
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -139,6 +150,8 @@ class Rig:
         self.run = Run(runid, mode, inp, duration, label, self.mapper.snapshot())
         self.run.meta["user_agent"] = ua
         self.run.meta["zero_ref"] = self.mapper.zero_ref()
+        if seed is not None:
+            self.run.meta["seed"] = seed
         self.run.write_meta()
         log("run started: %s (%ss)" % (runid, duration))
         return self.run
@@ -190,7 +203,8 @@ class Rig:
 
 def protocol_state():
     """Which acceptance runs already exist, from the run metadata."""
-    done = {"calibrate": False, "baseline": False, "imu": False, "drift": False}
+    done = {"calibrate": False, "baseline": False, "imu": False, "drift": False,
+            "course_mouse": False, "course_imu": False}
     try:
         names = os.listdir(LOGS)
     except OSError:
@@ -215,6 +229,11 @@ def protocol_state():
             done["imu"] = True
         elif mode == "drift" and el >= 280:
             done["drift"] = True
+        elif mode == "flight":
+            if inp == "mouse":
+                done["course_mouse"] = True
+            elif inp == "imu" and zeroed:
+                done["course_imu"] = True
     return done
 
 
@@ -318,9 +337,21 @@ async def ctl_handler(rig, ws):
                         m.get("er"), m.get("ep"), m.get("ey"),
                         1 if m.get("on") else 0, m.get("age"),
                     ])
+            elif t == "flight_frame":
+                if rig.run and rig.run.flight:
+                    rig.run.flight.row([
+                        round(m.get("wallMs", 0.0), 3), m.get("t"), m.get("input"),
+                        m.get("x"), m.get("y"), m.get("z"), m.get("v"), m.get("hdg"),
+                        m.get("pitch"), m.get("roll"),
+                        m.get("cr"), m.get("cp"), m.get("cy"),
+                        m.get("wx"), m.get("wy"), m.get("wz"),
+                        m.get("gates"), m.get("miss"), m.get("eff"),
+                        m.get("stall"), m.get("eng"), m.get("age"),
+                    ])
             elif t == "start_run":
                 r = rig.start_run(m.get("mode", "track"), m.get("input", "imu"),
-                                  float(m.get("duration", 90)), m.get("label", ""))
+                                  float(m.get("duration", 90)), m.get("label", ""),
+                                  seed=m.get("seed"))
                 await rig.broadcast({"type": "run_started", "runid": r.id})
                 await rig.broadcast(rig.status())
             elif t == "stop_run":
@@ -354,6 +385,8 @@ def static_response(path):
         rel = "sender.html"
     elif path in ("/harness", "/harness.html"):
         rel = "harness.html"
+    elif path in ("/flight", "/flight.html"):
+        rel = "flight.html"
     else:
         rel = path.lstrip("/")
     target = os.path.abspath(os.path.join(WEB, rel))
@@ -410,6 +443,7 @@ def print_banner(ip, port, http_port):
         print("  (install `segno` for a QR code)")
     print("  PHONE   %s" % url)
     print("  MAC     http://localhost:%d/harness   (no cert warning)" % http_port)
+    print("  COURSE  http://localhost:%d/flight" % http_port)
     print()
     print("  Safari will warn about the certificate. Tap")
     print("    Show Details -> visit this website -> Visit Website")

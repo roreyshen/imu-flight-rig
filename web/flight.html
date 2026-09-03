@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IMU Flight Rig — Course</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; background:#05070a; color:#e8ecf1; overflow:hidden;
+         font:13px/1.45 -apple-system,BlinkMacSystemFont,system-ui,sans-serif; }
+  #sky { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  .hud { position:absolute; pointer-events:none; font:12px ui-monospace,Menlo,monospace;
+         text-shadow:0 1px 3px rgba(0,0,0,.9); }
+  #tl { top:14px; left:16px; }
+  #tr { top:14px; right:16px; text-align:right; }
+  #bl { bottom:14px; left:16px; }
+  #br { bottom:14px; right:16px; text-align:right; }
+  .k { color:#8b94a3; font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; }
+  .v { font-size:22px; font-variant-numeric:tabular-nums; margin-bottom:9px; }
+  .v small { font-size:11px; color:#98a2b2; }
+  .warnbig { color:#ff6a5e; font-weight:700; font-size:15px; letter-spacing:.06em; }
+  .ok { color:#3ecf72; }
+  #panel { position:absolute; top:14px; left:50%; transform:translateX(-50%);
+           display:flex; gap:7px; align-items:center; background:rgba(10,14,20,.82);
+           border:1px solid #1e2634; border-radius:10px; padding:7px 9px; }
+  button { font:12px inherit; font-weight:600; padding:7px 12px; border:1px solid #2a3242;
+           border-radius:7px; background:#171d28; color:#dbe2ec; cursor:pointer; }
+  button:hover { background:#1f2734; }
+  button.on { background:#2f6df6; border-color:#2f6df6; color:#fff; }
+  button.go { background:#2c8a4b; border-color:#2c8a4b; color:#fff; }
+  button.stop { background:#c2413a; border-color:#c2413a; color:#fff; }
+  a { color:#7aa5f0; }
+  #msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+         background:rgba(12,16,22,.93); border:1px solid #2a3242; border-radius:13px;
+         padding:22px 28px; text-align:center; max-width:520px; display:none; }
+  #msg h2 { margin:0 0 8px; font-size:19px; }
+  #msg p { margin:5px 0; color:#9aa5b5; font-size:13px; }
+  #warn { position:absolute; top:62px; left:50%; transform:translateX(-50%);
+          background:#3a1a19; border:1px solid #6d2b27; color:#ffb9b4;
+          padding:9px 13px; border-radius:9px; font-size:12.5px; display:none;
+          max-width:640px; }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+
+<div id="panel">
+  <button id="iImu" class="on">IMU</button>
+  <button id="iMouse">Mouse</button>
+  <button id="go" class="go">Start course</button>
+  <button id="zero">Zero attitude</button>
+  <a href="/harness" style="font-size:11px;margin-left:6px">harness →</a>
+</div>
+<div id="warn"></div>
+
+<div class="hud" id="tl">
+  <div class="k">Airspeed</div><div class="v" id="hSpd">—<small> m/s</small></div>
+  <div class="k">Altitude</div><div class="v" id="hAlt">—<small> m</small></div>
+  <div class="k">AGL</div><div class="v" id="hAgl">—<small> m</small></div>
+</div>
+
+<div class="hud" id="tr">
+  <div class="k">Heading</div><div class="v" id="hHdg">—</div>
+  <div class="k">Gates</div><div class="v" id="hGates">0 / 15</div>
+  <div class="k">Section</div><div class="v" id="hSec" style="font-size:14px">—</div>
+</div>
+
+<div class="hud" id="bl">
+  <div class="k">Next gate</div><div class="v" id="hNext" style="font-size:15px">—</div>
+  <div class="k">Wind</div><div class="v" id="hWind" style="font-size:15px">—</div>
+</div>
+
+<div class="hud" id="br">
+  <div class="k">Time</div><div class="v" id="hTime">0.0<small> s</small></div>
+  <div class="k">Control effort</div><div class="v" id="hEff">—<small> °/s</small></div>
+  <div id="hAlert" class="warnbig"></div>
+</div>
+
+<div id="msg"></div>
+
+<script src="/render3d.js"></script>
+<script src="/flight.js"></script>
+<script src="/flightgame.js"></script>
+</body>
+</html>

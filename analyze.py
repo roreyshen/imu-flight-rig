@@ -288,6 +288,55 @@ def analyze_track(run):
     return res
 
 
+# ---------------------------------------------------------------------- flight
+
+def analyze_flight(fl, meta):
+    """Course run: gates, crashes, time, path, and control effort."""
+    if not fl or "t" not in fl:
+        return None
+    t = finite(fl["t"])
+    if t.size < 30:
+        return None
+    gates = finite(fl.get("gates", np.array([])))
+    missed = finite(fl.get("missed", np.array([])))
+    z = finite(fl.get("z", np.array([])))
+    eff = finite(fl.get("effort", np.array([])))
+    v = finite(fl.get("v", np.array([])))
+    stall = finite(fl.get("stall", np.array([])))
+    eng = finite(fl.get("engine", np.array([])))
+
+    # Effective frame rate of the flight loop; a paused tab shows up here.
+    span = float(t[-1] - t[0]) if t.size > 1 else 0.0
+    hz = (t.size / span) if span > 0 else None
+
+    # Path efficiency: distance actually flown vs straight-line course length.
+    x = finite(fl.get("x", np.array([])))
+    y = finite(fl.get("y", np.array([])))
+    n = min(x.size, y.size, z.size)
+    flown = float(np.sum(np.sqrt(np.diff(x[:n]) ** 2 + np.diff(y[:n]) ** 2 +
+                                 np.diff(z[:n]) ** 2))) if n > 1 else 0.0
+    reached = float(z[-1]) if z.size else 0.0
+
+    return {
+        "gates": int(gates[-1]) if gates.size else 0,
+        "missed": int(missed[-1]) if missed.size else 0,
+        "time_s": float(t[-1]),
+        "reached_m": reached,
+        "flown_m": flown,
+        "efficiency": (reached / flown) if flown > 0 else float("nan"),
+        # Control effort: how hard the input works, deg/s. With no spring to
+        # hold neutral you pay continuously just to stay put -- this is
+        # objection (a) as a single number.
+        "effort": float(eff[-1]) if eff.size else float("nan"),
+        "mean_speed": float(np.mean(v)) if v.size else float("nan"),
+        "stall_pct": float(100.0 * np.mean(stall)) if stall.size else 0.0,
+        "glide_pct": float(100.0 * np.mean(eng == 0)) if eng.size else 0.0,
+        "hz": hz,
+        "seed": meta.get("seed"),
+        "difficulty": (meta.get("config") or {}).get("difficulty", 1.0),
+    }
+
+
 # ------------------------------------------------------------------ per-run job
 
 def analyze_run(meta):
@@ -295,7 +344,9 @@ def analyze_run(meta):
     raw = read_csv(os.path.join(LOGS, "raw_%s.csv" % rid))
     run = read_csv(os.path.join(LOGS, "run_%s.csv" % rid))
     sync = read_csv(os.path.join(LOGS, "sync_%s.csv" % rid))
-    r = {"meta": meta, "rate": analyze_rate(raw) if raw else None,
+    fl = read_csv(os.path.join(LOGS, "flight_%s.csv" % rid))
+    r = {"flight": analyze_flight(fl, meta) if fl else None,
+         "meta": meta, "rate": analyze_rate(raw) if raw else None,
          "latency": analyze_latency(raw, run) if raw else {},
          "drift": analyze_drift(raw) if raw else {},
          "track": analyze_track(run) if run else None,
@@ -517,7 +568,66 @@ def render(results):
         w("| change | **%s° (%s%%)** |" % (fmt(f["delta"], 2), fmt(f["pct"], 1)))
         w("")
 
-    w("\n## 5. Neutral bias — the cost of no self-centring\n")
+    # -- course flight
+    w("\n## 5. Course flight\n")
+    fruns = [r for r in results if r.get("flight")]
+    if not fruns:
+        w("_No course runs yet. Fly one at `/flight`._\n")
+    else:
+        w("A gated course with a canyon, buildings, wind, a fog section and a "
+          "dead-stick finish. Terrain, gate positions and the gust sequence all "
+          "come from one seed, so every run faces the same course and the same "
+          "gusts at the same moments.\n")
+        w("| run | input | gates | crashed | reached | time | effort (°/s) | path eff. |")
+        w("|---|---|---|---|---|---|---|---|")
+        for r in fruns:
+            f = r["flight"]
+            crashed = "—" if f["reached_m"] >= 6300 else "yes"
+            w("| `%s` | %s | **%d**/15 | %s | %s m | %s s | **%s** | %s |" % (
+                r["meta"]["runid"], r["meta"]["input"], f["gates"], crashed,
+                fmt(f["reached_m"], 0), fmt(f["time_s"], 1),
+                fmt(f["effort"], 1), fmt(f["efficiency"], 3)))
+        w("")
+        for r in fruns:
+            f = r["flight"]
+            if f["hz"] is not None and f["hz"] < 20:
+                w("> **`%s` ran at only %s frames/s.** The browser paused or "
+                  "throttled the flight loop, so this run is not comparable.\n"
+                  % (r["meta"]["runid"], fmt(f["hz"], 1)))
+
+        fi = [r for r in fruns if r["meta"]["input"] == "imu"]
+        fm = [r for r in fruns if r["meta"]["input"] == "mouse"]
+        if fi and fm:
+            a, b = fi[-1]["flight"], fm[-1]["flight"]
+            if a["seed"] != b["seed"] or abs(a["difficulty"] - b["difficulty"]) > 1e-9:
+                w("> **Not comparable.** Different seed or difficulty "
+                  "(seed %s/%s, difficulty %s/%s). Re-fly both on the same "
+                  "settings.\n" % (a["seed"], b["seed"],
+                                    fmt(a["difficulty"], 2), fmt(b["difficulty"], 2)))
+            else:
+                w("\n### Head-to-head — same seed, same gusts\n")
+                w("| | IMU | mouse |")
+                w("|---|---|---|")
+                w("| gates | **%d**/15 | **%d**/15 |" % (a["gates"], b["gates"]))
+                w("| distance reached | %s m | %s m |" % (fmt(a["reached_m"], 0),
+                                                          fmt(b["reached_m"], 0)))
+                w("| control effort | **%s °/s** | **%s °/s** |" % (fmt(a["effort"], 1),
+                                                                    fmt(b["effort"], 1)))
+                w("| path efficiency | %s | %s |" % (fmt(a["efficiency"], 3),
+                                                     fmt(b["efficiency"], 3)))
+                w("| time in stall | %s%% | %s%% |" % (fmt(a["stall_pct"], 1),
+                                                       fmt(b["stall_pct"], 1)))
+                if np.isfinite(a["effort"]) and np.isfinite(b["effort"]) and b["effort"] > 0:
+                    w("\n> Flying with the phone costs **%.2f×** the control "
+                      "activity of the mouse on an identical course. That "
+                      "multiplier is the price of having no spring to hold "
+                      "neutral.\n" % (a["effort"] / b["effort"]))
+                w("\n> One asymmetry, stated plainly: the mouse gets rudder on the "
+                  "A/D keys while the phone gets it as a third tilt axis. The "
+                  "heading gates are the one place the two inputs are not "
+                  "strictly equivalent.\n")
+
+    w("\n## 6. Neutral bias — the cost of no self-centring\n")
     nb = [r for r in results if usable(r)]
     if not nb:
         w("_No tracking runs yet._\n")

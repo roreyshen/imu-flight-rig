@@ -38,6 +38,7 @@ You'll get a QR code and two addresses:
 ```
 PHONE   https://192.168.x.x:8443/
 MAC     http://localhost:8480/harness   (no cert warning)
+COURSE  http://localhost:8480/flight
 ```
 
 The harness opens on the Mac by itself. On the phone, scan the QR with the
@@ -96,6 +97,48 @@ Wave the phone in a figure-8 a few times to calibrate the magnetometer. Set
 **Settings → Display & Brightness → Auto-Lock → Never**. Put the phone flat on
 a table and **do not touch it for 5 minutes.** Not even once.
 
+### 5 and 6. Fly the course — mouse, then IMU
+
+Open **http://localhost:8480/flight**.
+
+A 6.4 km course with 15 gates: open country, then a canyon, then a city, then a
+fog bank, then the engine quits and you glide the last kilometre. Fly it once
+with the mouse and once with the phone.
+
+This is the part that actually answers the question. Chasing a ring on an
+artificial horizon measures a narrow thing well; flying a course measures
+whether tilt control is *usable*, which is what you wanted to know.
+
+**Controls** — the phone's tilt is a *commanded* attitude, and the airframe
+follows it through a lag, so the plane has inertia and you can overshoot. The
+faint blue bar near the reticle shows what you're commanding versus what the
+aircraft is actually doing; the gap between them is the lag you're flying
+against. Banking turns you. Pull up too steeply and you stall.
+
+For the mouse baseline: pointer position steers, `A`/`D` are the rudder.
+
+**Gates** — yellow rings you fly through. **Blue** rings additionally demand a
+heading: you must cross within 15° of the arrow, which is what puts the yaw
+axis under test. Miss a gate and it turns red.
+
+**Hazards, and what each one is testing:**
+
+| hazard | why it's there |
+|---|---|
+| Gates and canyon walls | sustained precise holding — where the missing spring hurts most |
+| Buildings | tight lateral precision at speed, with a hard fail |
+| Wind and turbulence | no force feedback: with a stick you *feel* the correction, with tilt you don't |
+| Heading gates | the yaw axis specifically |
+| Fog and night | long concentration with a degraded visual reference |
+| Engine failure | a dead-stick glide, no throttle, one approach |
+
+**The course is identical every run.** Terrain, gate positions, building
+placement and the gust sequence all come from a single seed, and gusts are
+indexed by elapsed time rather than by frame, so two runs hit the same gust at
+the same second even at different frame rates. That is what makes the IMU and
+mouse runs comparable. `analyze.py` refuses to compare runs recorded on
+different seeds or difficulties.
+
 ### Then
 
 ```bash
@@ -116,7 +159,7 @@ looks fine. Every one of them happened during the first real session.
 | **Stopping early** | The slowest part of the target path has a 26-second period. A 20-second run scores on whichever piece you happened to catch. | Stop asks for a second click; report marks runs under 60 s as uninterpretable |
 | **Not zeroing** | You fight a constant offset all run. One real run showed a 9.9° pitch bias from this alone. | Start refuses the first click and tells you |
 | **Touching the phone during a drift test** | Yaw slope measures your hand, not the sensor. One run drifted "0.108 deg/min" while pitch swung 49°. | Report rejects the run if pitch or roll moved more than 5° |
-| **Letting the harness window lose focus** | Chrome throttles the control loop to about 1 Hz. One run logged 8 frames in 20 seconds. | Red banner during the run; report marks it rejected |
+| **Letting the window lose focus** | Chrome throttles the control loop to about 1 Hz — and pauses it entirely in a hidden tab. One run logged 8 frames in 20 seconds. | Red banner during the run; report marks it rejected |
 
 ---
 
@@ -156,6 +199,13 @@ same socket, using the offset from the minimum-RTT exchange. `--selftest`
 proves it: with a phone clock deliberately skewed 37 seconds, it still reports
 sub-millisecond transport latency.
 
+**Canvas, not WebGL, for the course.** The world is real 3D — perspective
+projection, near-plane clipping, depth-sorted painter's algorithm — drawn with
+canvas 2D primitives. No dependency to vendor, no build step, and a predictable
+frame rate, which matters in a rig whose whole job is measuring latency. The
+tradeoff is per-primitive rather than per-pixel depth, so a gate ring can
+occasionally show through a building edge.
+
 **Sum-of-sines target path.** Four non-harmonic frequencies per axis with fixed
 phases — the standard forcing function in manual-control research. Exactly
 repeatable with no seed handling, and its frequency content won't accidentally
@@ -183,7 +233,8 @@ minute.
 | `logs/raw_<runid>.csv` | every sample: both clocks, both yaw sources, mapped axes |
 | `logs/sync_<runid>.csv` | every clock-sync exchange: RTT and offset |
 | `logs/run_<runid>.csv` | per-frame target vs actual vs error, on-target flag |
-| `logs/meta_<runid>.json` | mapping config, difficulty, mode, duration, zero reference |
+| `logs/flight_<runid>.csv` | course runs: position, attitude, commanded attitude, wind, gates, effort |
+| `logs/meta_<runid>.json` | mapping config, difficulty, seed, mode, duration, zero reference |
 
 `analyze.py --list` lists runs. `analyze.py --run <runid>` reports just one.
 

@@ -247,7 +247,9 @@ function renderProtocol() {
     ["calibrate", "Calibrate difficulty", "Mouse baseline, quick 90s. Tune difficulty until on-target is 60-80%."],
     ["baseline",  "Mouse baseline",       "Mouse baseline, endurance 300s. The control condition."],
     ["imu",       "IMU tracking",         "Zero attitude first, then IMU, endurance 300s."],
-    ["drift",     "Drift test",           "Drift, 300s. Phone flat on a table, untouched."]
+    ["drift",     "Drift test",           "Drift, 300s. Phone flat on a table, untouched."],
+    ["course_mouse", "Course \u2014 mouse",  "Fly the course with the mouse. Opens at /flight."],
+    ["course_imu",   "Course \u2014 IMU",    "Zero attitude, then fly the same course with the phone."]
   ];
   var html = "";
   for (var i = 0; i < steps.length; i++) {
