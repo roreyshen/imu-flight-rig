@@ -1,84 +1,100 @@
 # IMU Flight-Control Test Rig — Phase 0
 
-Measure whether orientation-only (IMU) input is actually usable for
-flight-sim-style control **before buying any hardware.**
+**Question:** is orientation-only input (tilting a phone) good enough to fly with?
 
-Your phone's IMU stands in for a controller. It streams raw orientation to your
-Mac over WebSocket; the Mac maps it to flight axes and runs a tracking task and
-a drift test. No microcontroller, no USB HID, no virtual joystick.
+**Approach:** measure it before buying any hardware. Your phone's IMU stands in
+for a controller. It streams raw orientation to a Mac over WebSocket; the Mac
+maps it to flight axes and runs a tracking task and a drift test. No
+microcontroller, no USB HID, no virtual joystick.
 
-The two known objections get measured, not argued:
+Two objections get measured instead of argued:
 
-- **(a) no self-centering force** → neutral bias, and the minute-1 vs minute-5
-  degradation over a 5-minute run
-- **(b) yaw drift** → deg/min, measured separately for the drifting relative
-  `alpha` and the fused `webkitCompassHeading`
+- **(a) no self-centering force** — there is no spring pulling back to neutral.
+  Measured as *neutral bias* and as degradation from minute 1 to minute 5.
+- **(b) yaw drift** — measured in degrees per minute.
 
-Everything runs locally. Raw samples go to CSV so you can re-analyze without
-re-running.
+Everything runs locally. Raw samples land in CSV so results can be re-derived
+without re-running anything.
 
 ---
 
-## Quick start
+## What you need
+
+- A Mac and an iPhone **on the same Wi-Fi**
+- Python 3 (already on macOS)
+- About 20 minutes
+
+---
+
+## Start it
 
 ```bash
 cd ~/imu-flight-rig
 ./run.sh
 ```
 
-That prints a QR code and two URLs:
+You'll get a QR code and two addresses:
 
 ```
-PHONE   https://192.168.2.54:8443/
+PHONE   https://192.168.x.x:8443/
 MAC     http://localhost:8480/harness   (no cert warning)
 ```
 
-The harness opens on your Mac automatically. Scan the QR with your iPhone
-camera, or type the `PHONE` URL into Safari.
+The harness opens on the Mac by itself. On the phone, scan the QR with the
+Camera app or type the `PHONE` address into Safari.
 
 **On the phone, once:**
 
-1. Safari says the certificate is not trusted. Tap **Show Details** →
-   **visit this website** → **Visit Website**. This is your own self-signed
-   certificate; the exception is remembered.
-2. Tap the big **Start streaming** button.
-3. Tap **Allow** on the motion-access prompt.
+1. Safari warns about the certificate. Tap **Show Details** → **visit this
+   website** → **Visit Website**. It's your own self-signed certificate, made
+   on your Mac 30 seconds ago. Safari remembers the exception.
+2. Tap **Start streaming**.
+3. Tap **Allow** on the motion prompt.
 
-The sender page then shows a live rate in Hz. If it reads ~60, you are good.
-
-> The phone must use HTTPS — iOS only grants motion access in a secure context.
-> The Mac harness is served over plain HTTP on **loopback only**, because
-> `localhost` is already a secure context and this saves you clicking through a
-> browser certificate warning every session.
+The page then shows a live rate. **If it reads about 60 Hz you're good.** If it
+doesn't, see Troubleshooting.
 
 ---
 
-## Running the three measurements
+## Run the tests
 
-Do them in this order. Each writes CSVs into `logs/`.
+The harness has a **Protocol** panel listing four steps and ticking them off as
+you complete them. Follow it top to bottom. It exists because every one of
+these is easy to get wrong, and a wrong run produces a plausible-looking number
+rather than an obvious error.
 
-### 1. Drift test — 5 minutes
+### 1. Calibrate difficulty — Mouse baseline, quick 90s
 
-Set **Settings → Display & Brightness → Auto-Lock → Never** first.
-Wave the phone in a figure-8 a few times to calibrate the magnetometer.
-Put the phone flat on a table and **do not touch it**.
+Chase the target ring with the mouse pointer for the **full 90 seconds**.
+Look at ON TARGET:
 
-In the harness: **Drift** → **Start run**. Walk away for 5 minutes.
+- above 90% → task is too easy to detect anything. Raise **difficulty**, repeat.
+- below 20% → too hard. Lower it.
+- **60–80% → correct.** Stop adjusting and don't touch the slider again.
 
-### 2. Mouse baseline — 5 minutes
+Both later tracking runs must use this same difficulty. The analysis refuses to
+compare runs recorded at different settings.
 
-This is what makes the IMU numbers mean anything. An RMS error of 4.2° tells
-you nothing until you know what the same task scores with a different input on
-the same day.
+### 2. Mouse baseline — endurance 300s
 
-**Tracking** → **Mouse baseline** → **endurance 300s** → **Start run**, then
-keep the aircraft symbol on the target ring using the pointer.
+Same thing for 5 minutes. This is your control condition. Without it, an IMU
+error of 9° means nothing, because you don't know what *any* input scores on
+this task.
 
-### 3. IMU tracking — 5 minutes
+### 3. IMU tracking — endurance 300s
 
-Hold the phone the way you would hold a controller, then press **Zero
-attitude** — that posture becomes neutral. **Tracking** → **IMU** →
-**endurance 300s** → **Start run**.
+Hold the phone the way you'd actually fly it. **Press Zero attitude.** That
+posture is now neutral. Then start, and fly for 5 minutes.
+
+If you skip zeroing, the rig treats *flat on a table* as neutral and you spend
+the whole run fighting a constant offset. The harness will stop you and make
+you confirm.
+
+### 4. Drift test — 300s
+
+Wave the phone in a figure-8 a few times to calibrate the magnetometer. Set
+**Settings → Display & Brightness → Auto-Lock → Never**. Put the phone flat on
+a table and **do not touch it for 5 minutes.** Not even once.
 
 ### Then
 
@@ -86,53 +102,77 @@ attitude** — that posture becomes neutral. **Tracking** → **IMU** →
 python3 analyze.py
 ```
 
-This writes `REPORT.md` with every acceptance number, recomputed from the CSVs.
+Writes `REPORT.md` with every number, recomputed from the CSVs.
 
 ---
 
-## Calibrating task difficulty
+## Four ways to waste a run
 
-The **difficulty** slider scales the target path's amplitude and bandwidth
-together. It is stored in the run's metadata, and `analyze.py` refuses to
-compare two runs recorded at different difficulties.
+The rig detects all of these and says so, rather than reporting a number that
+looks fine. Every one of them happened during the first real session.
 
-Use the mouse baseline to calibrate:
-
-- mouse baseline above ~90% on-target → task is saturating and cannot resolve
-  degradation. **Raise difficulty**, re-run both conditions.
-- mouse baseline below ~20% → too hard to resolve anything. **Lower it.**
-- aim for the mouse landing around **60–80%** on-target.
-
-`analyze.py` tells you which of these you are in.
+| mistake | what it does | how you find out |
+|---|---|---|
+| **Stopping early** | The slowest part of the target path has a 26-second period. A 20-second run scores on whichever piece you happened to catch. | Stop asks for a second click; report marks runs under 60 s as uninterpretable |
+| **Not zeroing** | You fight a constant offset all run. One real run showed a 9.9° pitch bias from this alone. | Start refuses the first click and tells you |
+| **Touching the phone during a drift test** | Yaw slope measures your hand, not the sensor. One run drifted "0.108 deg/min" while pitch swung 49°. | Report rejects the run if pitch or roll moved more than 5° |
+| **Letting the harness window lose focus** | Chrome throttles the control loop to about 1 Hz. One run logged 8 frames in 20 seconds. | Red banner during the run; report marks it rejected |
 
 ---
 
-## Keep the harness window focused
+## Two things iOS will not tell you
 
-Chrome throttles `requestAnimationFrame` to about 1 Hz in an unfocused or
-occluded window. That silently turns a tracking run into garbage. The harness
-detects this and shows a red banner, and `analyze.py` marks such runs
-**rejected** rather than reporting bogus numbers — but the fix is simply to
-leave the harness window in front for the whole run.
+Both were discovered by running this, not by reading documentation.
+
+**`webkitCompassHeading` freezes when the phone is still.** iOS suppresses
+heading updates from a stationary device, so a phone lying untouched reports
+one constant value forever. A constant series fits a *perfect zero slope*,
+which reads as "no drift" but actually means "no data." **Compass drift cannot
+be measured by a stationary test.** The report says so instead of printing a
+zero. It matters less than it sounds, since in real use the phone is always
+moving.
+
+**Sensor-to-handler latency is not observable.** Safari stamps
+`DeviceOrientationEvent.timeStamp` at dispatch, not at sensor acquisition, so
+that stage reads a hard zero. It's reported as unmeasurable and excluded from
+the totals rather than contributing a fake 0 ms.
 
 ---
 
-## Verifying the rig without a phone
+## Why the design is the way it is
+
+**One TLS port for the phone.** iOS grants self-signed certificate exceptions
+per host:port. A WebSocket on a second port fails its TLS check *silently* —
+no error visible on the phone. So the page and both sockets share 8443.
+
+**A separate plain-HTTP port for the Mac.** `localhost` is already a secure
+context, so the harness doesn't need TLS, and serving it over HTTP on loopback
+saves clicking through a browser certificate warning every session. Bound to
+127.0.0.1, never reachable from the network.
+
+**Clock sync, not subtraction.** The phone's clock and the Mac's are unrelated
+and can differ by minutes. Latency comes from an NTP-style handshake over the
+same socket, using the offset from the minimum-RTT exchange. `--selftest`
+proves it: with a phone clock deliberately skewed 37 seconds, it still reports
+sub-millisecond transport latency.
+
+**Sum-of-sines target path.** Four non-harmonic frequencies per axis with fixed
+phases — the standard forcing function in manual-control research. Exactly
+repeatable with no seed handling, and its frequency content won't accidentally
+line up with your own control bandwidth the way a random walk can.
+
+---
+
+## Verify the rig without a phone
 
 ```bash
 python3 server.py --selftest
 ```
 
-Drives the real WSS transport with a synthetic phone whose clock is
-deliberately skewed by 37 seconds, injects a known yaw drift rate and a known
-operator tracking error, then checks that the analysis recovers what was
-injected. It restores your saved mapping config afterwards.
-
-The clock-skew check is the important one. Phone and Mac clocks are unrelated,
-so latency **cannot** be measured by subtracting them. The rig runs an
-NTP-style handshake over the same socket and uses the offset from the
-minimum-RTT exchange. If that were broken, the self-test would report ~37 000 ms
-of latency instead of ~1 ms.
+Drives the real encrypted transport with a synthetic phone on a 37-second-skewed
+clock, injects a known drift rate and a known tracking error, and checks the
+analysis recovers them. Restores your saved config afterwards. Takes about a
+minute.
 
 ---
 
@@ -143,60 +183,41 @@ of latency instead of ~1 ms.
 | `logs/raw_<runid>.csv` | every sample: both clocks, both yaw sources, mapped axes |
 | `logs/sync_<runid>.csv` | every clock-sync exchange: RTT and offset |
 | `logs/run_<runid>.csv` | per-frame target vs actual vs error, on-target flag |
-| `logs/meta_<runid>.json` | mapping config, difficulty, device, mode, duration |
+| `logs/meta_<runid>.json` | mapping config, difficulty, mode, duration, zero reference |
 
-`analyze.py --list` lists recorded runs; `analyze.py --run <runid>` reports one.
+`analyze.py --list` lists runs. `analyze.py --run <runid>` reports just one.
 
 ---
 
 ## Mapping
 
-Per axis, in order: normalize to ±range → **deadzone** (rescaled, so output is
-continuous at the edge rather than stepping) → **expo** (`k·x³ + (1−k)·x`) →
+Per axis, in order: normalize to ±range → **deadzone** (rescaled, so the output
+is continuous at the edge instead of stepping) → **expo** (`k·x³ + (1−k)·x`) →
 **sensitivity** → clamp.
 
-Roll comes from `gamma`, pitch from `beta`, yaw from `alpha`. Every parameter is
-adjustable live from the harness and is snapshotted into each run's metadata, so
-a result is always traceable to the mapping that produced it.
-
-**Zero attitude** captures your current posture as neutral. Yaw needs this:
-`alpha` is 0–360 with no inherent zero, so "centre" is wherever you declare it.
-This is objection (a) in miniature — there is no mechanical zero to return to.
-
----
-
-## The tracking task
-
-The target follows a **sum of sines** — four non-harmonic frequencies per axis
-with fixed phases. This is the standard forcing function in manual-control
-research: exactly repeatable across runs with no seed handling, and its
-frequency content will not accidentally coincide with your own control
-bandwidth the way a random-walk path can. A 3-second ramp-in avoids a step at
-t=0, and the first 5 seconds are discarded from the statistics.
-
-The mouse baseline is **2-axis** (roll + pitch) — a mouse has no third axis, so
-the head-to-head comparison uses those two axes only. Yaw is reported for the
-IMU alone.
+Roll from `gamma`, pitch from `beta`, yaw from `alpha`. Every parameter is
+adjustable live and is snapshotted into the run metadata, so a result always
+traces back to the mapping that produced it.
 
 ---
 
 ## Troubleshooting
 
-| symptom | cause |
+| symptom | fix |
 |---|---|
-| Motion prompt never appears | Page must be HTTPS and the button tapped directly. `requestPermission()` only works from a real user gesture. |
-| Permission granted, no data | **Settings → Safari → Motion & Orientation Access** must be on. |
-| Rate well below 60 Hz | Low Power Mode, or the tab is backgrounded. Safari throttles background tabs. |
-| Compass reads `n/a` | Not an iPhone, or no magnetometer. Yaw falls back to relative `alpha`. |
+| Motion prompt never appears | Must be HTTPS, and the button tapped directly. `requestPermission()` only works from a real tap. |
+| Allowed it, still no data | **Settings → Safari → Motion & Orientation Access** must be on. |
+| Rate well under 60 Hz | Low Power Mode off; keep the Safari tab in the foreground. |
+| Compass shows `n/a` | Not an iPhone, or no magnetometer. Yaw falls back to relative `alpha`. |
 | `webkitCompassAccuracy` is −1 | Magnetometer uncalibrated — figure-8 the phone. |
-| Phone can't load the URL | Different Wi-Fi network, or the router has client isolation on. |
-| Drift run ends early | Auto-Lock. Set it to Never. |
-| Port already in use | The rig is already running: `pkill -f server.py` |
+| Phone can't load the page | Different Wi-Fi, or the router has client isolation on. |
+| Drift run dies partway | Auto-Lock. Set it to Never. |
+| `port already in use` | Already running. `pkill -f server.py` |
 
 ---
 
-## Deliberately not done
+## Deliberately not built
 
 No virtual HID device or joystick. macOS has no vJoy equivalent and `foohid` is
-unmaintained. **The harness is the target** — this rig does not try to drive a
-real simulator, and it does not need to in order to answer the question.
+unmaintained. **The harness is the target** — this rig does not drive a real
+simulator, and doesn't need to in order to answer the question.

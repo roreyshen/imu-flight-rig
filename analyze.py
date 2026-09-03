@@ -120,6 +120,19 @@ def drift_axis(t, deg):
     }
 
 
+def drift_disturbed(out):
+    """A stationary phone holds pitch and roll to well under a degree. If it
+    did not, the phone was handled and the run is not a drift measurement --
+    the yaw slope it produces will look plausible and mean nothing."""
+    worst = 0.0
+    for name, d in out.items():
+        if d.get("frozen"):
+            continue
+        if name.startswith("beta") or name.startswith("gamma"):
+            worst = max(worst, d["max_abs_dev"])
+    return worst if worst > 5.0 else None
+
+
 def analyze_drift(raw):
     t = raw.get("arrival_wall_ms")
     if t is None:
@@ -326,6 +339,14 @@ def render(results):
         w("\n**`%s`** — %s s, %d samples\n" % (
             r["meta"]["runid"], fmt(r["meta"].get("elapsed_s"), 0),
             (r["rate"] or {}).get("n", 0)))
+        moved = drift_disturbed(r["drift"])
+        if moved is not None:
+            w("> **Rejected — the phone was moved.** Pitch/roll deviated by up to "
+              "%s during the run; a phone lying untouched holds both to well under "
+              "a degree. Any yaw slope from this run is measuring your hand, not "
+              "sensor drift. Re-run with the phone flat on a table and do not "
+              "touch it.\n" % fmt(moved, 1, "°"))
+            continue
         w("\n| axis | drift (deg/min) | max deviation | excursion | residual sd |")
         w("|---|---|---|---|---|")
         frozen = []
@@ -350,7 +371,8 @@ def render(results):
               % (name, fmt(d["value"], 4), d["n"], fmt(d["span_s"], 0)))
         a = r["drift"].get("alpha (relative, gyro-integrated)")
         c = r["drift"].get("compass (fused, absolute)")
-        if a and c and not a.get("frozen") and not c.get("frozen"):
+        if (a and c and not a.get("frozen") and not c.get("frozen")
+                and drift_disturbed(r["drift"]) is None):
             w("> Relative `alpha` drifts at **%s deg/min**; fused compass heading at "
               "**%s deg/min**. The compass residual sd of %s is jitter, not drift — "
               "which is the distinction that decides whether objection (b) is a real "

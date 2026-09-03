@@ -36,6 +36,7 @@ var st = {
   cfg: null, rateHz: 0, source: "—",
   mouse: { x: 0.5, y: 0.5, active: false },
   fps: [], lowFps: false, lostFocus: false,
+  zeroed: false, protocol: null, armStart: false, armStop: false,
   acc: null, plot: null
 };
 
@@ -81,6 +82,8 @@ function onStatus(m) {
   st.cfg = m.config;
   st.tol = (m.config && m.config.tolerance_deg) || 5;
   if (m.config && m.config.difficulty) st.difficulty = m.config.difficulty;
+  st.zeroed = !!m.zeroed;
+  if (m.protocol) { st.protocol = m.protocol; renderProtocol(); }
   $("rate").textContent = (m.rate_hz || 0) + " Hz";
   $("srcpill").textContent = m.senders ? ("phone ×" + m.senders) : "no phone";
   if (!m.run && st.running) finish();
@@ -235,10 +238,55 @@ $("iImu").onclick  = function () { st.input = "imu";  pick(["iImu","iMouse"],"iI
 $("iMouse").onclick= function () { st.input = "mouse";pick(["iImu","iMouse"],"iMouse"); syncUI(); };
 $("dQuick").onclick= function () { st.duration = 90;  pick(["dQuick","dEnd"],"dQuick"); syncUI(); };
 $("dEnd").onclick  = function () { st.duration = 300; pick(["dQuick","dEnd"],"dEnd"); syncUI(); };
-$("zero").onclick  = function () { send({ type: "zero" }); };
+$("zero").onclick  = function () { send({ type: "zero" }); st.armStart = false; warn(null); };
+
+function renderProtocol() {
+  var p = st.protocol, el = $("protocol");
+  if (!p || !el) return;
+  var steps = [
+    ["calibrate", "Calibrate difficulty", "Mouse baseline, quick 90s. Tune difficulty until on-target is 60-80%."],
+    ["baseline",  "Mouse baseline",       "Mouse baseline, endurance 300s. The control condition."],
+    ["imu",       "IMU tracking",         "Zero attitude first, then IMU, endurance 300s."],
+    ["drift",     "Drift test",           "Drift, 300s. Phone flat on a table, untouched."]
+  ];
+  var html = "";
+  for (var i = 0; i < steps.length; i++) {
+    var ok = p[steps[i][0]];
+    html += '<div class="step ' + (ok ? "done" : "todo") + '">' +
+            '<span class="tick">' + (ok ? "\u2713" : (i + 1)) + '</span>' +
+            '<div><b>' + steps[i][1] + '</b><br><span class="sd">' +
+            steps[i][2] + '</span></div></div>';
+  }
+  el.innerHTML = html;
+}
 
 $("go").onclick = function () {
-  if (st.running) { send({ type: "stop_run" }); finish(); return; }
+  if (st.running) {
+    // Stopping early is the single most common way to waste a run, so it
+    // takes a second click.
+    var left = st.duration - (nowMs() - st.t0) / 1000;
+    if (left > 2 && !st.armStop) {
+      st.armStop = true;
+      warn("This run has " + left.toFixed(0) + " s left. A short run is not " +
+           "interpretable — the slowest part of the target path has a 26 s " +
+           "period. Click Stop run again if you really want to end it.");
+      setTimeout(function () { st.armStop = false; }, 8000);
+      return;
+    }
+    send({ type: "stop_run" }); finish(); return;
+  }
+  // An IMU run that was never zeroed treats "flat on a table" as neutral,
+  // so you fight a constant offset for the whole run. This is what made the
+  // first real session unusable.
+  if (st.mode === "track" && st.input === "imu" && !st.zeroed && !st.armStart) {
+    st.armStart = true;
+    warn("Zero attitude has not been set. Hold the phone the way you will fly " +
+         "it, tap Zero attitude, then start. Without it the rig treats flat-on-" +
+         "a-table as neutral. Click Start run again to go anyway.");
+    setTimeout(function () { st.armStart = false; }, 8000);
+    return;
+  }
+  st.armStart = false; warn(null);
   resetAccum();
   if (st.mode === "drift") { st.duration = 300; pick(["dQuick","dEnd"],"dEnd"); }
   st.t0 = nowMs(); st.running = true;

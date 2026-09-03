@@ -43,6 +43,15 @@
   .axhead { font:11px ui-monospace,Menlo,monospace; color:#ffd24a; margin:10px 0 5px;
             text-transform:uppercase; letter-spacing:.08em; }
   .note { color:#7d8798; font-size:11.5px; margin-top:10px; }
+  .step { display:grid; grid-template-columns:22px 1fr; gap:9px; padding:7px 0;
+          border-bottom:1px solid #171d27; font-size:12px; }
+  .step:last-child { border-bottom:0; }
+  .step .tick { width:20px; height:20px; border-radius:50%; text-align:center;
+                line-height:20px; font-size:11px; font-weight:700; }
+  .step.done .tick { background:#245c37; color:#9ae6b4; }
+  .step.todo .tick { background:#252b37; color:#8b94a3; }
+  .step.done b { color:#9ae6b4; }
+  .step .sd { color:#7d8798; font-size:11px; }
   #mousepad { position:absolute; inset:0; cursor:crosshair; }
   .wrap { position:relative; }
 </style>
@@ -88,6 +97,11 @@
 
   <div>
     <div class="panel">
+      <h2>Protocol — do these in order</h2>
+      <div id="protocol"></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
       <h2>Run</h2>
       <div class="row">
         <button id="mTrack" class="on">Tracking</button>

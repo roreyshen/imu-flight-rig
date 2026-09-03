@@ -74,6 +74,7 @@ class Mapper:
         # Zero reference captured by zero(); yaw especially needs one, since
         # alpha is 0..360 and "centre" is wherever you declare it.
         self.ref = {"alpha": None, "beta": 0.0, "gamma": 0.0, "compass": None}
+        self.zeroed = False   # did the user ever press Zero attitude?
         if path and os.path.exists(path):
             try:
                 with open(path) as f:
@@ -106,6 +107,7 @@ class Mapper:
     def zero(self, sample):
         """Capture the current attitude as neutral."""
         with self.lock:
+            self.zeroed = True
             for key, field in (("alpha", "alpha"), ("beta", "beta"),
                                ("gamma", "gamma"), ("compass", "compass")):
                 v = sample.get(field)

@@ -165,6 +165,8 @@ class Rig:
             "zero_ref": self.mapper.zero_ref(),
             "senders": len(self.senders),
             "rate_hz": self.rate_hz(),
+            "zeroed": self.mapper.zeroed,
+            "protocol": protocol_state(),
         }
 
     def rate_hz(self):
@@ -184,6 +186,36 @@ class Rig:
                 dead.append(ws)
         for ws in dead:
             self.ctl.discard(ws)
+
+
+def protocol_state():
+    """Which acceptance runs already exist, from the run metadata."""
+    done = {"calibrate": False, "baseline": False, "imu": False, "drift": False}
+    try:
+        names = os.listdir(LOGS)
+    except OSError:
+        return done
+    for n in names:
+        if not (n.startswith("meta_") and n.endswith(".json")):
+            continue
+        try:
+            with open(os.path.join(LOGS, n)) as f:
+                m = json.load(f)
+        except (OSError, ValueError):
+            continue
+        el = float(m.get("elapsed_s") or 0)
+        mode, inp = m.get("mode"), m.get("input")
+        zeroed = bool((m.get("zero_ref") or {}).get("beta"))
+        if mode == "track" and inp == "mouse":
+            if el >= 80:
+                done["calibrate"] = True
+            if el >= 280:
+                done["baseline"] = True
+        elif mode == "track" and inp == "imu" and el >= 280 and zeroed:
+            done["imu"] = True
+        elif mode == "drift" and el >= 280:
+            done["drift"] = True
+    return done
 
 
 def log(msg):
