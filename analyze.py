@@ -90,6 +90,16 @@ def drift_axis(t, deg):
     if keep.sum() < 30:
         keep = np.ones_like(t, dtype=bool)
     t, deg = t[keep], deg[keep]
+
+    # A sensor that stops updating produces a perfect zero slope, which reads
+    # as "no drift" but is really "no data". iOS does exactly this with
+    # webkitCompassHeading when the device is perfectly still. Catch it.
+    uniq = int(np.unique(deg).size)
+    if uniq <= 1:
+        return {"frozen": True, "value": float(deg[0]), "n": int(deg.size),
+                "span_s": float(t[-1] - t[0])}
+    stale_frac = uniq / float(deg.size)
+
     u = np.unwrap(deg, period=360.0)
     u = u - u[0]
     slope, _ = np.polyfit(t, u, 1)          # deg per second
@@ -106,6 +116,7 @@ def drift_axis(t, deg):
         "total_excursion": float(np.sum(np.abs(np.diff(coarse)))),
         "resid_std": float(np.std(resid)),
         "n": int(t.size),
+        "stale_frac": stale_frac,
     }
 
 
@@ -317,14 +328,29 @@ def render(results):
             (r["rate"] or {}).get("n", 0)))
         w("\n| axis | drift (deg/min) | max deviation | excursion | residual sd |")
         w("|---|---|---|---|---|")
+        frozen = []
         for name, d in r["drift"].items():
-            w("| %s | **%s** | %s | %s | %s |" % (
+            if d.get("frozen"):
+                frozen.append((name, d))
+                w("| %s | _no data_ | _no data_ | _no data_ | _no data_ |" % name)
+                continue
+            w("| %s | **%s** | %s | %s | %s |%s" % (
                 name, fmt(d["deg_per_min"], 3), fmt(d["max_abs_dev"], 2, "°"),
-                fmt(d["total_excursion"], 1, "°"), fmt(d["resid_std"], 2, "°")))
+                fmt(d["total_excursion"], 1, "°"), fmt(d["resid_std"], 2, "°"),
+                "  <!-- stale -->" if d.get("stale_frac", 1) < 0.01 else ""))
         w("")
+        for name, d in frozen:
+            w("> **`%s` produced no usable data.** The value was frozen at %s° for "
+              "all %d samples over %s s — the sensor stopped updating, which is "
+              "not the same as not drifting. On iOS this is expected for "
+              "`webkitCompassHeading`: CoreLocation suppresses heading updates "
+              "when the device is perfectly still, so a phone lying untouched on "
+              "a table reports one constant heading forever. **Drift of this "
+              "source cannot be measured by a stationary test.**\n"
+              % (name, fmt(d["value"], 4), d["n"], fmt(d["span_s"], 0)))
         a = r["drift"].get("alpha (relative, gyro-integrated)")
         c = r["drift"].get("compass (fused, absolute)")
-        if a and c:
+        if a and c and not a.get("frozen") and not c.get("frozen"):
             w("> Relative `alpha` drifts at **%s deg/min**; fused compass heading at "
               "**%s deg/min**. The compass residual sd of %s is jitter, not drift — "
               "which is the distinction that decides whether objection (b) is a real "
@@ -392,6 +418,12 @@ def render(results):
         w("\n**`%s`** — %s s, difficulty %s, combined RMS **%s°**, on-target **%s%%**\n" % (
             r["meta"]["runid"], fmt(t["duration_s"], 0), fmt(diff, 2),
             fmt(t["combined_rms"]), fmt(t["on_target_pct"], 1)))
+        if t["duration_s"] < 60:
+            w("> **Too short to interpret.** %s s of data. The slowest component "
+              "of the forcing function has a 26 s period, so a run under ~60 s "
+              "does not cover even two cycles — the score depends mostly on which "
+              "part of the path you happened to catch. Use the full run length.\n"
+              % fmt(t["duration_s"], 0))
         if t.get("fps") is not None:
             if t["fps"] < 30:
                 w("> **This run is not trustworthy.** The harness logged only %s "
